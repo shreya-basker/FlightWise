@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/models/*.joblib
+backend/models/metrics.json
+backend/data/flights_cleaned.csv
+*.zip
+.env
+backend/data/bts/
+backend/data/bts_flights_weather_cleaned.csv
+backend/models/us_*.json
+backend/models/us_*.joblib

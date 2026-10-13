@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlightWise | US live-aware delay risk</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero"><p class="eyebrow">FLIGHTWISE · US DOMESTIC PROTOTYPE</p><h1>Delay risk with<br><em>weather context.</em></h1><p>Official US flight history plus current airport weather. This is not a live flight-status guarantee.</p></section>
+    <section class="card">
+      <p class="section-label">Live lookup <span id="live-status"></span></p>
+      <form id="lookup-form" class="lookup"><input id="flight-number" placeholder="Flight number e.g. AA100" aria-label="Flight number"><button type="submit">Look up flight →</button></form>
+      <p class="hint">Live lookup requires your local Aviationstack API key. You can still estimate a route below using live weather.</p>
+    </section>
+    <section class="card">
+      <p class="section-label">Route estimate</p>
+      <form id="prediction-form">
+        <div class="grid"><label>Airline code<input id="airline" value="AA" maxlength="8" required></label><label>Flight date<input id="flight_date" type="date" required></label>
+        <label>From (IATA)<input id="origin" value="ATL" maxlength="3" required></label><label>To (IATA)<input id="destination" value="LAX" maxlength="3" required></label>
+        <label>Scheduled departure hour<input id="hour" type="number" min="0" max="23" value="9" required></label><label>Distance (km, optional)<input id="distance" type="number" min="1" step="1" placeholder="Calculated from airports"></label></div>
+        <button type="submit">Estimate delay risk <span>→</span></button>
+      </form>
+    </section>
+    <section id="result" class="result hidden" aria-live="polite"></section>
+    <section class="note"><strong>Method note.</strong> The model is trained on US BTS records with historical hourly weather. Current weather is context only—forecast accuracy, operational decisions, aircraft rotation, and air-traffic restrictions can still change an outcome.</section>
+  </main>
+  <script src="/static/app.js"></script>
+</body></html>

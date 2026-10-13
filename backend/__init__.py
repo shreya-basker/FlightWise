@@ -1,0 +1,2 @@
+"""FlightWise backend package."""
+
