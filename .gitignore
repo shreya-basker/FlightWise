@@ -11,3 +11,5 @@ backend/data/bts/
 backend/data/bts_flights_weather_cleaned.csv
 backend/models/us_*.json
 backend/models/us_*.joblib
+backend/data/weather_cache/
+.DS_Store

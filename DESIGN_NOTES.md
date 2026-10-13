@@ -16,11 +16,11 @@ Allowed before-departure features include carrier, airports, calendar/time, dist
 
 ## Weather policy
 
-Historical training joins hourly departure-airport weather to historical flights. Live requests obtain current origin weather using the same named fields. Historical reanalysis and a future forecast are not identical information sets, so the UI/API names weather as context and records its source rather than calling it certainty.
+Historical training joins hourly departure-airport weather to historical flights. Requests use Open-Meteo's hourly forecast for the scheduled departure hour when the date is inside its window, otherwise current conditions labelled `current_proxy`, with the same named fields. Historical reanalysis and a future forecast are not identical information sets, so the UI/API names weather as context and records its source rather than calling it certainty.
 
 ## Evaluation policy
 
-The train/test boundary falls between dates, never within a date. The system compares a regularized logistic baseline with histogram gradient boosting and records F1, ROC-AUC, Brier score, and calibration bins. A model is selected by F1, then ROC-AUC as a tiebreaker.
+Data is split into three date-separated chronological periods (fit → threshold validation → test); no date is shared between periods. Models are trained without class re-weighting so their probabilities stay interpretable. Each model's F1-maximising threshold is chosen on the validation dates only, then evaluated once on the test dates. The system compares a regularized logistic baseline with histogram gradient boosting and records F1, ROC-AUC, Brier score, and calibration bins. A model is selected by test F1, then ROC-AUC as a tiebreaker.
 
 ## Live data policy
 

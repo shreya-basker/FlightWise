@@ -1,120 +1,147 @@
-# FlightWise
+# FlightWise — US domestic flight delay-risk estimate
 
-## US live-aware upgrade
+FlightWise is an educational full-stack app that estimates whether a **US domestic** flight is likely to **depart 15+ minutes late** (BTS `DepDel15`). It uses only information available before departure: carrier, origin, destination, flight date, scheduled departure hour, route distance, and departure-airport weather.
 
-FlightWise now has a US domestic workflow based on the official BTS Reporting Carrier On-Time Performance dataset. It creates a weather-aware model using historical hourly weather at the departure airport, then uses current departure-airport weather during a request.
-
-Run the new workflow after installing requirements:
-
-```bash
-python3 -m backend.ml.download_bts 2024 1
-python3 -m backend.ml.preprocess_us backend/data/bts/bts_2024_01.zip
-python3 -m backend.ml.train_us
-python3 -m pytest
-python3 -m uvicorn backend.main:app --reload
-```
-
-The default preprocessing run takes a reproducible sample of up to 150,000 valid flights, restricts weather retrieval to the 40 busiest departure airports in that sample, and writes `backend/data/bts_flights_weather_cleaned.csv`. It deliberately excludes actual departure/arrival times and post-flight delay causes from features.
-
-### Current flight lookup
-
-Weather works without an API key through Open-Meteo. To enable flight-number lookup, copy `.env.example` to `.env` and add a personal-use Aviationstack key:
-
-```bash
-cp .env.example .env
-# Open .env in VS Code and paste your key after AVIATIONSTACK_API_KEY=
-```
-
-Never commit `.env`. `GET /api/live/config` confirms whether lookup is enabled. `GET /api/live/flight/{flight_number}` obtains the provider's current flight record, collects current origin weather, and returns a model estimate. The API does not pretend a provider's estimated delay is a model prediction.
-
-### US API
-
-- `GET /api/us/model-info` — exact US model/evaluation metadata after training.
-- `POST /api/us/predict` — context-aware US route estimate with live origin weather.
-- `GET /api/live/flight/{flight_number}` — optional live lookup and estimate.
-
-The new model uses a date-separated chronological holdout, compares weather-aware logistic regression with histogram gradient boosting, and records Accuracy, Precision, Recall, F1, ROC-AUC, Brier score, and calibration bins. Do not describe results until the training run writes them.
-
-The original India sample workflow remains available only as the earlier educational prototype. The browser interface now uses the US workflow.
-
-FlightWise is a local full-stack college prototype that estimates whether an Indian domestic flight is likely to depart **15 minutes or more late**. It uses only details that are knowable before departure: airline, route, calendar date, scheduled departure hour, and distance.
-
-It includes a static frontend, FastAPI API, reproducible preprocessing/training scripts, model metrics, and tests.
-
-> **Important:** This is an educational prototype, not a live flight-status system. The included source file has 190 rows and is not sufficiently documented to verify it as authentic flight-level operational data. It should not be used to make travel decisions or claimed to have production-grade accuracy.
-
-## What is included
+> **This is a historical-pattern estimate, not a flight status, a guarantee, or a travel recommendation.** The probability comes from a model trained on past BTS flights. Weather is the only live input; air-traffic restrictions, aircraft rotation and crew issues are not modelled.
 
 ```text
-backend/data/india_flight_delays_2025.csv  # supplied sample, preserved unchanged
-backend/ml/preprocess.py                   # cleaning and target creation
-backend/ml/train.py                        # chronological evaluation and model export
-backend/main.py                            # API + frontend hosting
-frontend/                                  # responsive browser interface
-tests/                                     # preprocessing and API smoke tests
+Browser (frontend/)  →  FastAPI (backend/main.py)
+                          ├── POST /api/us/predict        US model + Open-Meteo weather
+                          ├── GET  /api/us/model-info     real training/evaluation metadata
+                          ├── GET  /api/live/config       is flight lookup configured? (never returns the key)
+                          ├── GET  /api/live/flight/{no}  optional Aviationstack lookup + estimate
+                          └── legacy India prototype: /api/predict, /api/options, /api/model-info
+ML pipeline (backend/ml/)
+  download_bts.py → preprocess_us.py (+ weather.py) → train_us.py → backend/models/us_*
 ```
 
-## Run on macOS / VS Code
+## Run it (macOS / VS Code)
 
-Open a terminal in this project folder, then run:
+From the project root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
-python3 -m backend.ml.preprocess
-python3 -m backend.ml.train
-python3 -m pytest
+
+python3 -m backend.ml.download_bts 2024 1
+python3 -m backend.ml.preprocess_us backend/data/bts/bts_2024_01.zip
+python3 -m backend.ml.train_us
+python3 -m pytest -q
 python3 -m uvicorn backend.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000](http://127.0.0.1:8000). The interactive API documentation is at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+Open <http://127.0.0.1:8000> (API docs at <http://127.0.0.1:8000/docs>).
 
-The training command writes these local artifacts:
+**Windows (PowerShell):** use `py -3.12 -m venv .venv` and `.\.venv\Scripts\Activate.ps1`, then run the same commands with `python` instead of `python3`. Use a python.org/Microsoft Store CPython, not MSYS2's Python, because MSYS2 Python cannot install the PyPI wheels for pandas/scikit-learn.
 
-- `backend/data/flights_cleaned.csv`
-- `backend/models/flight_delay_model.joblib`
-- `backend/models/metrics.json`
+What each step does:
 
-The UI gets its dropdown choices and route-distance defaults from that saved metadata, so the API schema and model feature schema remain aligned.
+| Step | Output | Notes |
+|---|---|---|
+| `download_bts 2024 1` | `backend/data/bts/bts_2024_01.zip` (≈27.6 MB) | The BTS server can be slow (this run took ≈10 min). Existing archives are reused if they pass a CRC check; a corrupt or partial file is replaced. |
+| `preprocess_us …zip` | `backend/data/bts_flights_weather_cleaned.csv` | Reads the CSV member inside the ZIP. It accepts several ZIPs, e.g. `…bts_2024_01.zip …bts_2024_02.zip`. Options: `--sample-rows` (default 150 000, `0` = all) and `--max-airports` (default 40). Weather is cached under `backend/data/weather_cache/`. |
+| `train_us` | `backend/models/us_flight_delay_model.joblib`, `backend/models/us_metrics.json` | Prints the real held-out metrics. |
+
+### Optional: live flight-number lookup
+
+Open-Meteo weather needs no key. Flight-number lookup needs a personal [Aviationstack](https://aviationstack.com) key:
+
+```bash
+cp .env.example .env
+# edit .env:  AVIATIONSTACK_API_KEY=your_key
+```
+
+The key is read only on the server, is never sent to the browser, and `.env` is git-ignored. Without a key, `/api/live/flight/{no}` returns `503` with "API key required", and the UI shows **API KEY REQUIRED** and disables the lookup button. If your plan rejects HTTPS (`https_access_restricted`), also set `AVIATIONSTACK_BASE_URL=http://api.aviationstack.com/v1/flights`. Lookups are cached for `LIVE_FLIGHT_CACHE_SECONDS` (default 300) to save quota.
+
+## Data pipeline
+
+**Source.** The US DOT BTS *Reporting Carrier On-Time Performance (1987–present)* monthly PREZIP files. Each ZIP contains the data CSV **and `readme.html`**.
+
+**Preprocessing (`backend/ml/preprocess_us.py`)**
+- Opens the ZIP with `zipfile.ZipFile`, selects the single `.csv` member, and streams the header and 100k-row chunks through `archive.open(csv_name)`, keeping the archive open throughout. It does not use `pd.read_csv(zip)`, which failed with *"Multiple files found in ZIP file"*.
+- Reads only `FlightDate, Reporting_Airline, Origin, Dest, CRSDepTime, Distance, DepDel15, Cancelled, Diverted`. Leakage columns such as actual departure/arrival times, `ArrDelay`, and the carrier/weather/NAS delay-cause columns are never loaded.
+- Removes cancelled and diverted flights, and uses `DepDel15` as the target.
+- Converts miles to km (× 1.609344) and derives month, day of week (Mon = 0), and scheduled local hour from `CRSDepTime` (HHMM; invalid values such as 2400 are dropped).
+- Takes a deterministic sample (`random_state=42`).
+- Joins hourly Open-Meteo **historical** weather (temperature, precipitation, wind, cloud cover) at the origin airport, in local time, for the busiest origin airports.
+
+**Training (`backend/ml/train_us.py`)**
+- Splits the data into three date-separated chronological periods: **fit → threshold validation → test**. No flight date appears in more than one period.
+- Compares weather-aware **Logistic Regression** (one-hot + scaling) and **Histogram Gradient Boosting** (native categorical handling).
+- Tunes each model's decision threshold for F1 on the validation dates only, then scores once on the untouched test dates.
+- Selects the model by test F1, with ROC-AUC as the tie-breaker.
+- Stores accuracy, precision, recall, F1, ROC-AUC, Brier score, 10-bin calibration, the periods, and the support lists in `us_metrics.json`.
+
+## Actual results (run on 2026-10-13, BTS January 2024)
+
+Preprocessing: 150,000 sampled clean flights (delay rate 23.2%). Weather was retrieved for all 40 busiest origins, giving **109,682** weather-enriched flights.
+
+| Period | Dates | Flights | Delay rate |
+|---|---|---|---|
+| Fit | 2024-01-01 → 01-18 | 63,380 | 27.6% |
+| Threshold validation | 2024-01-19 → 01-23 | 17,767 | 24.6% |
+| Test | 2024-01-24 → 01-31 | 28,535 | 16.1% |
+
+| Model (test set) | Threshold | F1 | ROC-AUC | Brier | Precision | Recall | Accuracy |
+|---|---|---|---|---|---|---|---|
+| Logistic Regression | 0.19 | 0.3026 | 0.6001 | **0.1389** | 0.1995 | 0.6262 | 0.5348 |
+| **Hist Gradient Boosting (selected)** | 0.25 | **0.3159** | **0.6281** | 0.1448 | 0.2251 | 0.5295 | 0.6303 |
+
+How to read these numbers:
+- The discrimination is modest: ROC-AUC 0.63, where 0.5 is chance.
+- The test week had far fewer delays (16%) than the storm-affected fit period (28%). Mean predicted probability on test was 0.235 against 0.161 observed, so probabilities run high under this shift (see `calibration_bins`).
+- With only January in the data, the `Month` feature carries no signal. Requests for other months get a warning.
+
+Your numbers will match exactly only with the same input file, sample size and Open-Meteo data. Always use `GET /api/us/model-info` as the source of truth.
 
 ## API
 
-- `GET /api/health` — service/model status.
-- `GET /api/options` — supported airlines, airports, routes, and sample route distances.
-- `GET /api/model-info` — generated model metadata and actual holdout metrics.
-- `POST /api/predict` — a historical-pattern delay-risk estimate.
-
-Example request:
+`POST /api/us/predict`
 
 ```json
-{
-  "airline": "AirAsia India",
-  "origin": "LKO",
-  "destination": "COK",
-  "flight_date": "2025-06-01",
-  "scheduled_departure_hour": 16,
-  "distance_km": 1226
-}
+{"airline": "AA", "origin": "ATL", "destination": "LAX", "flight_date": "2026-10-14", "scheduled_departure_hour": 9, "distance_km": null}
 ```
 
-Unsupported airlines, airports, routes, and airline–route combinations return `422` rather than silently making a prediction from an unfamiliar input. Invalid values (such as a 25:00 hour or the same origin/destination) are also rejected.
+The response includes:
+- `prediction` and `delay_probability`; `threshold` and `base_rate`.
+- `distance_km` and `distance_source` (great-circle if omitted).
+- `weather_context`, with `source` and `kind`:
+  - `forecast`: Open-Meteo hourly forecast for the scheduled hour, when the date is within about 16 days.
+  - `recent_model_data`: for recent past dates.
+  - `current_proxy`: current conditions, clearly labelled, when the date is outside that window.
+- `model`, `warnings` (unseen airline/airport/month), `limitations`, and `disclaimer`.
 
-## Data and evaluation notes
+| Situation | Response |
+|---|---|
+| US model not trained | `503` before any weather/provider call |
+| Unknown or non-US airport, same origin/destination, hour outside 0–23 | `422` with the reason |
+| Open-Meteo unreachable or incomplete | `502`, and no estimate is made |
+| No Aviationstack key | `503` "API key required…" |
+| Flight not found by provider | `404` |
+| Provider flight is not US-domestic | `200` with flight data, `risk: null` and a reason |
 
-The included CSV was obtained from the public [TejShah804 India Flight Delay Data Analysis Project](https://github.com/TejShah804/India-Flight-Delay-Data-Analysis-Project). Its README says the data came from Kaggle, but it does not identify a primary source, license, collection method, or data dictionary. Therefore FlightWise records it as an **unverified educational sample**. The repository contains 190 rows; after preprocessing, the script reports the usable count.
+`GET /api/health` returns `{status, us_model_ready, model_ready}` (`model_ready` refers to the legacy India prototype).
 
-`preprocess.py` removes cancelled/malformed rows, derives the target from actual `DepDelay`, derives weekday from `FlightDate`, and excludes post-departure fields such as actual departure/arrival times and arrival delay. This prevents target leakage.
-
-`train.py` uses a chronological 75/25 holdout, compares Logistic Regression, Decision Tree, and Random Forest, then saves the model selected by test F1 score. It writes the exact Accuracy, Precision, Recall, F1, and ROC-AUC into `backend/models/metrics.json`. Do not report any metric until you have run this command; with such a small sample, a single holdout estimate is volatile and is not a generalization claim.
-
-For a stronger future version, replace the raw CSV with a documented, licensed, flight-level source that includes observed departure outcomes, retain the same required columns, rerun preprocessing/training, and add independent temporal validation plus live weather/airport-disruption inputs.
-
-## Test
+## Tests
 
 ```bash
-python3 -m pytest
+python3 -m pytest -q
+python3 -m compileall -q backend
 ```
 
-The tests cover preprocessing schema/target behavior and API health. Run the preprocessing and training commands before manually testing prediction endpoints.
+There are 20 tests, and they run offline because providers are stubbed. They cover:
+- A ZIP containing **both the BTS CSV and `readme.html`**, a ZIP with no CSV, a non-ZIP file, and a missing schema.
+- Leakage-column exclusion, cancelled/diverted filtering, mile→km conversion, and HHMM parsing.
+- DST de-duplication, the date-separated split, and end-to-end training artifacts.
+- API 503/422/502 paths, a successful prediction, secret non-exposure, and frontend serving.
+
+## Legacy India prototype
+
+`backend/ml/preprocess.py`, `train.py` and `/api/predict` are the original 190-row, unverified India sample. They are kept for reference only and are not used by the UI. To rebuild it: `python3 -m backend.ml.preprocess && python3 -m backend.ml.train`.
+
+## Remaining external requirements
+
+- **Aviationstack key** (optional). Flight-number lookup was verified only for its "not configured" path, because no key is present in this environment.
+- **Internet access** to `transtats.bts.gov` (download), `archive-api.open-meteo.com` (preprocessing) and `api.open-meteo.com` (each prediction). All three were reachable during this run.

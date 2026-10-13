@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from functools import lru_cache
 
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from backend.app.config import FRONTEND_DIR, METRICS_PATH, MODEL_PATH, US_METRICS_PATH, US_MODEL_PATH
 from backend.app.live_flights import configured as live_configured, lookup_flight, route_distance_km
 from backend.ml.train_us import US_FEATURES
-from backend.ml.weather import WEATHER_FEATURES, live_weather
+from backend.ml.weather import WEATHER_FEATURES, departure_weather
 from backend.ml.schema import FEATURE_COLUMNS
 
 app = FastAPI(title="FlightWise API", version="1.0.0", description="Educational flight-delay risk prototype.")
@@ -70,7 +71,11 @@ def home() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "model_ready": MODEL_PATH.exists() and METRICS_PATH.exists()}
+    return {
+        "status": "ok",
+        "us_model_ready": US_MODEL_PATH.exists() and US_METRICS_PATH.exists(),
+        "model_ready": MODEL_PATH.exists() and METRICS_PATH.exists(),  # legacy India prototype
+    }
 
 
 @app.get("/api/options")
@@ -105,12 +110,16 @@ class USPredictionRequest(BaseModel):
         return value.upper()
 
 
+DISCLAIMER = (
+    "Historical-pattern estimate from US BTS flights and departure-airport weather. It is not a flight status, "
+    "a guarantee, or a travel recommendation; air-traffic control, aircraft rotation and crew issues are not modelled."
+)
+
+
 def us_prediction(request: USPredictionRequest, weather: dict) -> dict:
     model, metadata = load_us_artifacts()
-    if request.origin == request.destination:
-        raise HTTPException(status_code=422, detail="Origin and destination must differ.")
     if any(weather.get(field) is None for field in WEATHER_FEATURES):
-        raise HTTPException(status_code=502, detail="Weather provider did not return all required current conditions.")
+        raise HTTPException(status_code=502, detail="Weather provider did not return all required conditions (temperature, precipitation, wind, cloud cover).")
     distance = request.distance_km or route_distance_km(request.origin, request.destination)
     row = pd.DataFrame([{
         "Airline": request.airline, "Origin": request.origin, "Dest": request.destination,
@@ -119,7 +128,28 @@ def us_prediction(request: USPredictionRequest, weather: dict) -> dict:
         **{field: weather[field] for field in WEATHER_FEATURES},
     }])[US_FEATURES]
     probability = float(model.predict_proba(row)[0][1])
-    return {"prediction": "likely_delayed" if probability >= 0.5 else "likely_on_time", "delay_probability": round(probability, 4), "threshold": 0.5, "distance_km": distance, "weather_context": weather, "model": metadata["selected_model"], "disclaimer": "US domestic historical-pattern estimate. Live weather is context, not a guarantee; a forecast may differ from weather when the flight departs."}
+    threshold = float(metadata.get("decision_threshold", 0.5))
+    support = metadata["training_data"]
+    warnings = [message for present, message in (
+        (request.airline in support["airlines"], f"Airline {request.airline} is not in the training data; it is treated as unknown."),
+        (request.origin in support["origins"], f"Origin {request.origin} is not one of the trained departure airports; it is treated as unknown."),
+        (request.destination in support["destinations"], f"Destination {request.destination} is not in the training data; it is treated as unknown."),
+        (f"{request.flight_date.month:02}" in {m[-2:] for m in support.get("months", [])}, "The flight month is outside the trained months, so seasonal effects are not learned."),
+    ) if not present]
+    return {
+        "prediction": "likely_delayed" if probability >= threshold else "likely_on_time",
+        "delay_probability": round(probability, 4), "threshold": threshold,
+        "base_rate": support.get("delay_rate"), "distance_km": round(float(distance), 1),
+        "distance_source": "provided" if request.distance_km else "great-circle from airport coordinates",
+        "weather_context": weather, "model": metadata["selected_model"], "warnings": warnings,
+        "limitations": metadata.get("limitations", []), "disclaimer": DISCLAIMER,
+    }
+
+
+def _route_checks(request: USPredictionRequest) -> None:
+    if request.origin == request.destination:
+        raise HTTPException(status_code=422, detail="Origin and destination must differ.")
+    route_distance_km(request.origin, request.destination)  # raises ValueError for non-US/unknown codes
 
 
 @app.get("/api/us/model-info")
@@ -130,14 +160,16 @@ def us_model_info() -> dict:
 
 @app.post("/api/us/predict")
 def predict_us(request: USPredictionRequest) -> dict:
+    # Fail clearly before spending a weather-provider request when training is incomplete or input is invalid.
+    load_us_artifacts()
     try:
-        # Fail clearly before spending a weather-provider request when training is incomplete.
-        load_us_artifacts()
-        return us_prediction(request, live_weather(request.origin))
+        _route_checks(request)
+        weather = departure_weather(request.origin, request.flight_date, request.scheduled_departure_hour)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except httpx.HTTPError as error:
-        raise HTTPException(status_code=502, detail="Weather provider is unavailable.") from error
+        raise HTTPException(status_code=502, detail=f"Weather provider (Open-Meteo) is unavailable: {type(error).__name__}. No estimate was made.") from error
+    return us_prediction(request, weather)
 
 
 @app.get("/api/live/config")
@@ -147,19 +179,30 @@ def live_configuration() -> dict:
 
 @app.get("/api/live/flight/{flight_number}")
 def live_flight(flight_number: str) -> dict:
+    load_us_artifacts()
+    if not re.fullmatch(r"[A-Za-z0-9]{2}\d{1,4}", flight_number.strip()):
+        raise HTTPException(status_code=422, detail="Use an IATA flight number such as AA100.")
     try:
-        flight = lookup_flight(flight_number)
-        if not all([flight.get("airline"), flight.get("origin"), flight.get("destination"), flight.get("scheduled_departure")]):
-            raise HTTPException(status_code=502, detail="Live provider response lacks the fields needed for a risk estimate.")
-        scheduled = datetime.fromisoformat(flight["scheduled_departure"].replace("Z", "+00:00"))
-        request = USPredictionRequest(airline=flight["airline"], origin=flight["origin"], destination=flight["destination"], flight_date=scheduled.date(), scheduled_departure_hour=scheduled.hour)
-        return {"flight": flight, "risk": us_prediction(request, live_weather(request.origin))}
+        flight = lookup_flight(flight_number.strip())
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    except (httpx.HTTPError, ValueError) as error:
-        raise HTTPException(status_code=502, detail="A live data provider request failed.") from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="Live flight provider (Aviationstack) request failed.") from error
+    if not all([flight.get("airline"), flight.get("origin"), flight.get("destination"), flight.get("scheduled_departure")]):
+        raise HTTPException(status_code=502, detail="Live provider response lacks the fields needed for a risk estimate.")
+    # Aviationstack reports airport-local wall-clock time (labelled +00:00), which matches BTS CRSDepTime.
+    scheduled = datetime.fromisoformat(flight["scheduled_departure"].replace("Z", "+00:00"))
+    try:
+        request = USPredictionRequest(airline=flight["airline"], origin=flight["origin"], destination=flight["destination"], flight_date=scheduled.date(), scheduled_departure_hour=scheduled.hour)
+        _route_checks(request)
+        weather = departure_weather(request.origin, request.flight_date, request.scheduled_departure_hour)
+    except ValueError as error:  # includes pydantic ValidationError, e.g. a non-US route
+        return {"flight": flight, "risk": None, "risk_unavailable_reason": f"No US-domestic estimate for this flight: {error}"}
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="Weather provider (Open-Meteo) is unavailable.") from error
+    return {"flight": flight, "risk": us_prediction(request, weather)}
 
 
 @app.post("/api/predict")
