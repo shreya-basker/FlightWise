@@ -17,6 +17,15 @@ ML pipeline (backend/ml/)
 
 ## Run it (macOS / VS Code)
 
+**Requires Python 3.11+.** The `python3` that ships with macOS/Xcode Command Line Tools is 3.9 and will not work (current scikit-learn and airportsdata need 3.11+). Check with `python3 --version`. If it is older, install a newer Python and use it for the venv:
+
+```bash
+brew install python@3.12
+python3.12 -m venv .venv
+```
+
+(Alternatively, use the python.org installer.) A `.venv` copied from Windows will not work on a Mac, so always create it on the Mac. The downloaded data and trained model are git-ignored, so run the full pipeline on the Mac as well.
+
 From the project root:
 
 ```bash
@@ -53,7 +62,7 @@ cp .env.example .env
 # edit .env:  AVIATIONSTACK_API_KEY=your_key
 ```
 
-The key is read only on the server, is never sent to the browser, and `.env` is git-ignored. Without a key, `/api/live/flight/{no}` returns `503` with "API key required", and the UI shows **API KEY REQUIRED** and disables the lookup button. If your plan rejects HTTPS (`https_access_restricted`), also set `AVIATIONSTACK_BASE_URL=http://api.aviationstack.com/v1/flights`. Lookups are cached for `LIVE_FLIGHT_CACHE_SECONDS` (default 300) to save quota.
+The key is read only on the server, is never sent to the browser, and `.env` is git-ignored. Without a key, `/api/live/flight/{no}` returns `503` with "API key required", and the UI shows **API KEY REQUIRED** and disables the lookup button. If your plan rejects HTTPS (`https_access_restricted`), also set `AVIATIONSTACK_BASE_URL=http://api.aviationstack.com/v1/flights`. Lookups are cached for `LIVE_FLIGHT_CACHE_SECONDS` (default 300) to save quota. Aviationstack mixes several dates and partner codeshare records (e.g. BA5615 for AA1). FlightWise picks the operating flight's scheduled/active departure, and if only a codeshare number was entered it uses the operating carrier.
 
 ## Data pipeline
 
@@ -143,5 +152,5 @@ There are 20 tests, and they run offline because providers are stubbed. They cov
 
 ## Remaining external requirements
 
-- **Aviationstack key** (optional). Flight-number lookup was verified only for its "not configured" path, because no key is present in this environment.
+- **Aviationstack key** (optional; configured locally in `.env` and verified on 2026-10-13 with a live AA1 JFK→LAX lookup over HTTPS). Each fresh lookup uses one request of your plan's monthly quota.
 - **Internet access** to `transtats.bts.gov` (download), `archive-api.open-meteo.com` (preprocessing) and `api.open-meteo.com` (each prediction). All three were reachable during this run.

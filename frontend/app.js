@@ -32,7 +32,7 @@ function riskHtml(data, heading) {
 
 function flightHtml(f) {
   return `<div class="facts"><p class="status">LIVE FLIGHT RECORD · ${esc(f.provider)} · fetched ${esc(new Date(f.retrieved_at).toLocaleString())}</p>
-    <p><strong>${esc(f.flight_number)}</strong> ${esc(f.airline_name || f.airline)} · ${esc(f.origin)} → ${esc(f.destination)} · status: <strong>${esc(f.status || "unavailable")}</strong></p>
+    <p><strong>${esc(f.flight_number)}</strong>${f.requested_flight_number && f.requested_flight_number !== f.flight_number ? ` (requested as ${esc(f.requested_flight_number)})` : ""} ${esc(f.airline_name || f.airline)} · ${esc(f.origin)} → ${esc(f.destination)} · status: <strong>${esc(f.status || "unavailable")}</strong></p>
     <p class="small">Scheduled ${esc(f.scheduled_departure)} · estimated ${esc(f.estimated_departure)} · provider-reported delay ${esc(f.departure_delay_minutes)} min · terminal ${esc(f.terminal)} · gate ${esc(f.gate)}</p>
     <p class="small">The status above is the provider's; the percentage below is FlightWise's separate historical-pattern estimate.</p></div>`;
 }

@@ -106,3 +106,33 @@ def test_live_lookup_without_key_returns_503(us_model, monkeypatch, tmp_path):
 
 def test_live_lookup_rejects_malformed_flight_number(us_model):
     assert client.get("/api/live/flight/not-a-flight").status_code == 422
+
+
+def _record(number, date, status, codeshare=None, airline="AA", origin="JFK", dest="LAX"):
+    flight = {"iata": number, "codeshared": codeshare}
+    return {"flight_date": date, "flight_status": status, "flight": flight, "airline": {"iata": airline, "name": "test air"},
+            "departure": {"iata": origin, "scheduled": f"{date}T08:30:00+00:00"}, "arrival": {"iata": dest}}
+
+
+def test_flight_lookup_prefers_operating_upcoming_record_over_codeshares(monkeypatch, tmp_path):
+    from backend.app import live_flights
+    payload = {"data": [
+        _record("BA5615", "2026-10-12", "landed", {"airline_iata": "aa", "flight_iata": "aa1"}, airline="BA"),
+        _record("AA1", "2026-10-12", "landed"),
+        _record("AA1", "2026-10-13", "scheduled"),
+    ]}
+    monkeypatch.setenv("AVIATIONSTACK_API_KEY", "test-key")
+    monkeypatch.setattr(live_flights.httpx, "get", lambda *a, **k: httpx.Response(200, json=payload))
+    live_flights._CACHE.clear()
+    flight = live_flights.lookup_flight("AA1")
+    assert (flight["flight_number"], flight["airline"], flight["flight_date"], flight["status"]) == ("AA1", "AA", "2026-10-13", "scheduled")
+
+
+def test_codeshare_only_result_resolves_to_operating_carrier(monkeypatch):
+    from backend.app import live_flights
+    payload = {"data": [_record("UL2026", "2026-10-12", "landed", {"airline_iata": "aa", "airline_name": "american airlines", "flight_iata": "aa100"}, airline="UL", dest="LHR")]}
+    monkeypatch.setenv("AVIATIONSTACK_API_KEY", "test-key")
+    monkeypatch.setattr(live_flights.httpx, "get", lambda *a, **k: httpx.Response(200, json=payload))
+    live_flights._CACHE.clear()
+    flight = live_flights.lookup_flight("AA100")
+    assert (flight["flight_number"], flight["airline"], flight["requested_flight_number"]) == ("AA100", "AA", "AA100")
