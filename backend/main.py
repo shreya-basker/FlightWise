@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from backend.app.config import FRONTEND_DIR, METRICS_PATH, MODEL_PATH, US_METRICS_PATH, US_MODEL_PATH
-from backend.app.live_flights import configured as live_configured, lookup_flight, route_distance_km
+from backend.app.live_flights import configured as live_configured, departure_outcome, lookup_flight, route_distance_km
 from backend.ml.train_us import US_FEATURES
 from backend.ml.weather import WEATHER_FEATURES, departure_weather
 from backend.ml.schema import FEATURE_COLUMNS
@@ -199,10 +199,12 @@ def live_flight(flight_number: str) -> dict:
         _route_checks(request)
         weather = departure_weather(request.origin, request.flight_date, request.scheduled_departure_hour)
     except ValueError as error:  # includes pydantic ValidationError, e.g. a non-US route
-        return {"flight": flight, "risk": None, "risk_unavailable_reason": f"No US-domestic estimate for this flight: {error}"}
+        return {"flight": flight, "risk": None, "outcome": departure_outcome(flight, None), "risk_unavailable_reason": f"No US-domestic estimate for this flight: {error}"}
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="Weather provider (Open-Meteo) is unavailable.") from error
-    return {"flight": flight, "risk": us_prediction(request, weather)}
+    risk = us_prediction(request, weather)
+    # For departed flights the estimate still uses only pre-departure inputs; the outcome is shown for comparison.
+    return {"flight": flight, "risk": risk, "outcome": departure_outcome(flight, risk)}
 
 
 @app.post("/api/predict")

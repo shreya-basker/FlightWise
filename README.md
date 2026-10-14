@@ -131,6 +131,19 @@ The response includes:
 | Flight not found by provider | `404` |
 | Provider flight is not US-domestic | `200` with flight data, `risk: null` and a reason |
 
+### Departed flights (live lookup only)
+
+`GET /api/live/flight/{no}` returns `flight.phase`, which is one of `scheduled`, `departed`, `landed`, `cancelled`, `diverted`, `incident` or `unknown`. A flight counts as departed when the provider status is `active`/`landed` **or** an actual departure time is recorded, even if the status lags. For departed flights the response also contains:
+
+```json
+"outcome": {"departed": true, "phase": "landed", "actual_departure": "2026-10-12T09:19:00+00:00",
+            "departure_delay_minutes": 49, "delayed_15": true, "prediction_matched": false}
+```
+
+- The delay estimate is still computed from **pre-departure inputs only**: schedule, route, and weather for the scheduled hour. The actual delay is shown for comparison and is never a model input.
+- `departure_delay_minutes` is the provider's figure. If the provider leaves it blank, it is derived from the actual minus the scheduled departure time.
+- The UI shows a **Departed** (or **Departed · Landed**) status pill, the actual departure and arrival times with delay chips, and a "What actually happened" panel saying whether the estimate matched. The manual route estimate never shows this panel.
+
 `GET /api/health` returns `{status, us_model_ready, model_ready}` (`model_ready` refers to the legacy India prototype).
 
 ## Tests
@@ -140,11 +153,12 @@ python3 -m pytest -q
 python3 -m compileall -q backend
 ```
 
-There are 20 tests, and they run offline because providers are stubbed. They cover:
+There are 26 tests, and they run offline because providers are stubbed. They cover:
 - A ZIP containing **both the BTS CSV and `readme.html`**, a ZIP with no CSV, a non-ZIP file, and a missing schema.
 - Leakage-column exclusion, cancelled/diverted filtering, mile→km conversion, and HHMM parsing.
 - DST de-duplication, the date-separated split, and end-to-end training artifacts.
 - API 503/422/502 paths, a successful prediction, secret non-exposure, and frontend serving.
+- Live lookups: codeshare and multi-date record selection, and departed/landed/scheduled phases with the outcome comparison.
 
 ## Legacy India prototype
 

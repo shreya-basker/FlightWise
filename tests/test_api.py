@@ -136,3 +136,46 @@ def test_codeshare_only_result_resolves_to_operating_carrier(monkeypatch):
     live_flights._CACHE.clear()
     flight = live_flights.lookup_flight("AA100")
     assert (flight["flight_number"], flight["airline"], flight["requested_flight_number"]) == ("AA100", "AA", "AA100")
+
+
+def _live(monkeypatch, records):
+    from backend.app import live_flights
+    monkeypatch.setenv("AVIATIONSTACK_API_KEY", "test-key")
+    monkeypatch.setattr(live_flights.httpx, "get", lambda *a, **k: httpx.Response(200, json={"data": records}))
+    monkeypatch.setattr(main, "departure_weather", lambda airport, day, hour: {**WEATHER, "airport": airport})
+    live_flights._CACHE.clear()
+
+
+def test_departed_flight_shows_estimate_with_departed_status_and_outcome(us_model, monkeypatch):
+    landed = _record("AA1", "2024-01-10", "landed")
+    landed["departure"].update({"actual": "2024-01-10T09:19:00+00:00", "delay": 49})
+    _live(monkeypatch, [landed])
+    body = client.get("/api/live/flight/AA1").json()
+    assert body["flight"]["phase"] == "landed"
+    assert body["flight"]["actual_departure"] == "2024-01-10T09:19:00+00:00"
+    assert body["risk"]["prediction"] in {"likely_delayed", "likely_on_time"}
+    outcome = body["outcome"]
+    assert outcome["departed"] and outcome["departure_delay_minutes"] == 49 and outcome["delayed_15"] is True
+    assert outcome["prediction_matched"] == (body["risk"]["prediction"] == "likely_delayed")
+
+
+def test_in_air_flight_without_provider_delay_derives_it_from_actual_time(us_model, monkeypatch):
+    active = _record("AA1", "2024-01-10", "active")
+    active["departure"]["actual"] = "2024-01-10T08:39:00+00:00"  # scheduled 08:30 -> 9 minutes
+    _live(monkeypatch, [active])
+    body = client.get("/api/live/flight/AA1").json()
+    assert body["flight"]["phase"] == "departed"
+    assert body["outcome"]["departure_delay_minutes"] == 9 and body["outcome"]["delayed_15"] is False
+
+
+def test_scheduled_flight_has_no_outcome(us_model, monkeypatch):
+    _live(monkeypatch, [_record("AA1", "2024-01-10", "scheduled")])
+    body = client.get("/api/live/flight/AA1").json()
+    assert body["flight"]["phase"] == "scheduled" and body["outcome"] is None and body["risk"] is not None
+
+
+def test_actual_departure_marks_flight_departed_even_if_status_lags():
+    from backend.app.live_flights import flight_phase
+    assert flight_phase("scheduled", {"actual": "2024-01-10T08:40:00+00:00"}) == "departed"
+    assert flight_phase("scheduled", {}) == "scheduled"
+    assert flight_phase("cancelled", {}) == "cancelled"

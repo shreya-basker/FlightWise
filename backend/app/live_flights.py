@@ -78,26 +78,68 @@ def _fetch_flight(flight_number: str) -> dict:
         "flight_date": record.get("flight_date"), "status": record.get("flight_status"),
         "airline": operating_airline,
         "airline_name": (codeshared.get("airline_name") or airline.get("name") or "").title() or None,
+        "phase": flight_phase(record.get("flight_status"), departure),
         "origin": departure.get("iata"), "destination": arrival.get("iata"),
+        "origin_name": departure.get("airport"), "destination_name": arrival.get("airport"),
+        # Aviationstack times are airport-local wall-clock values labelled +00:00.
         "scheduled_departure": departure.get("scheduled"), "estimated_departure": departure.get("estimated"),
+        "actual_departure": departure.get("actual") or departure.get("actual_runway"),
         "departure_delay_minutes": departure.get("delay"), "terminal": departure.get("terminal"), "gate": departure.get("gate"),
+        "scheduled_arrival": arrival.get("scheduled"), "estimated_arrival": arrival.get("estimated"),
+        "actual_arrival": arrival.get("actual") or arrival.get("actual_runway"), "arrival_delay_minutes": arrival.get("delay"),
     }
 
 
-UPCOMING_STATUSES = {"scheduled", "active"}
+DEPARTED_STATUSES = {"active", "landed"}
+
+
+def flight_phase(status: str | None, departure: dict) -> str:
+    """Normalise provider status; a recorded actual departure counts as departed even if the status lags."""
+    status = (status or "").lower()
+    if status == "landed":
+        return "landed"
+    if status == "active" or departure.get("actual") or departure.get("actual_runway"):
+        return "departed"
+    return status if status in {"scheduled", "cancelled", "diverted", "incident"} else "unknown"
+
+
+def _minutes_between(start: str | None, end: str | None) -> int | None:
+    try:
+        return round((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() / 60)
+    except (TypeError, ValueError):
+        return None
+
+
+def departure_outcome(flight: dict, risk: dict | None) -> dict | None:
+    """For a flight that has left the gate, compare the pre-departure estimate with what happened.
+
+    The outcome is reported alongside the estimate; it is never an input to the model.
+    """
+    if flight.get("phase") not in {"departed", "landed"}:
+        return None
+    delay = flight.get("departure_delay_minutes")
+    if delay is None and flight.get("actual_departure"):
+        delay = max(0, _minutes_between(flight.get("scheduled_departure"), flight.get("actual_departure")) or 0)
+    delayed = None if delay is None else delay >= 15
+    predicted = None if not risk else risk["prediction"] == "likely_delayed"
+    return {
+        "departed": True, "phase": flight["phase"], "actual_departure": flight.get("actual_departure"),
+        "departure_delay_minutes": delay, "delayed_15": delayed,
+        "prediction_matched": None if delayed is None or predicted is None else delayed == predicted,
+    }
 
 
 def select_record(flights: list[dict], flight_number: str) -> dict:
     """Pick the operating flight's next/current departure from Aviationstack's mixed result list.
 
     Results mix several dates and partner codeshare records (e.g. BA5615 "codeshared: aa1").
-    Prefer records whose own number is the requested one, then scheduled/active over landed,
-    then the latest flight date.
+    Prefer records whose own number is the requested one, then a flight currently in the air,
+    then the latest flight date (today's departure, even if it has already left), then scheduled.
     """
     wanted = flight_number.upper()
     exact = [r for r in flights if ((r.get("flight") or {}).get("iata") or "").upper() == wanted]
     candidates = exact or flights
-    return max(candidates, key=lambda r: (r.get("flight_status") in UPCOMING_STATUSES, r.get("flight_date") or ""))
+    return max(candidates, key=lambda r: (r.get("flight_status") == "active", r.get("flight_date") or "", r.get("flight_status") == "scheduled"))
 
 
 def route_distance_km(origin: str, destination: str) -> float:
